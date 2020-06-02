@@ -1,3 +1,6 @@
+# Project
+*.pickle
+
 # MacOS
 .DS_Store
 

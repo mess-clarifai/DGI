@@ -1,7 +1,9 @@
+import os
 import numpy as np
 import scipy.sparse as sp
 import torch
 import torch.nn as nn
+from tqdm import tqdm, trange
 
 from models import DGI, LogReg
 from utils import process
@@ -63,44 +65,46 @@ cnt_wait = 0
 best = 1e9
 best_t = 0
 
-for epoch in range(nb_epochs):
-    model.train()
-    optimiser.zero_grad()
+if not os.path.exists('best_dgi.pickle'):
+    pbar = trange(nb_epochs)
+    for epoch in pbar:
+        model.train()
+        optimiser.zero_grad()
 
-    idx = np.random.permutation(nb_nodes)
-    shuf_fts = features[:, idx, :]
+        idx = np.random.permutation(nb_nodes)
+        shuf_fts = features[:, idx, :]
 
-    lbl_1 = torch.ones(batch_size, nb_nodes)
-    lbl_2 = torch.zeros(batch_size, nb_nodes)
-    lbl = torch.cat((lbl_1, lbl_2), 1)
+        lbl_1 = torch.ones(batch_size, nb_nodes)
+        lbl_2 = torch.zeros(batch_size, nb_nodes)
+        lbl = torch.cat((lbl_1, lbl_2), 1)
 
-    if torch.cuda.is_available():
-        shuf_fts = shuf_fts.cuda()
-        lbl = lbl.cuda()
-    
-    logits = model(features, shuf_fts, sp_adj if sparse else adj, sparse, None, None, None) 
+        if torch.cuda.is_available():
+            shuf_fts = shuf_fts.cuda()
+            lbl = lbl.cuda()
 
-    loss = b_xent(logits, lbl)
+        logits = model(features, shuf_fts, sp_adj if sparse else adj, sparse, None, None, None)
 
-    print('Loss:', loss)
+        loss = b_xent(logits, lbl)
 
-    if loss < best:
-        best = loss
-        best_t = epoch
-        cnt_wait = 0
-        torch.save(model.state_dict(), 'best_dgi.pkl')
-    else:
-        cnt_wait += 1
+        pbar.desc = ('Loss: {:.4f}'.format(loss))
 
-    if cnt_wait == patience:
-        print('Early stopping!')
-        break
+        if loss < best:
+            best = loss
+            best_t = epoch
+            cnt_wait = 0
+            torch.save(model.state_dict(), 'best_dgi.pickle')
+        else:
+            cnt_wait += 1
 
-    loss.backward()
-    optimiser.step()
+        if cnt_wait == patience:
+            tqdm.write('Early stopping!')
+            break
 
-print('Loading {}th epoch'.format(best_t))
-model.load_state_dict(torch.load('best_dgi.pkl'))
+        loss.backward()
+        optimiser.step()
+
+print('Loading {}th Epoch'.format(best_t) if best_t else 'Loading Existing Graph')
+model.load_state_dict(torch.load('best_dgi.pickle'))
 
 embeds, _ = model.embed(features, sp_adj if sparse else adj, sparse, None)
 train_embs = embeds[0, idx_train]
@@ -112,25 +116,28 @@ val_lbls = torch.argmax(labels[0, idx_val], dim=1)
 test_lbls = torch.argmax(labels[0, idx_test], dim=1)
 
 tot = torch.zeros(1)
-tot = tot.cuda()
+if torch.cuda.is_available():
+    tot = tot.cuda()
 
 accs = []
 
-for _ in range(50):
+pbar = trange(50)
+for _ in pbar:
     log = LogReg(hid_units, nb_classes)
     opt = torch.optim.Adam(log.parameters(), lr=0.01, weight_decay=0.0)
-    log.cuda()
 
     pat_steps = 0
     best_acc = torch.zeros(1)
-    best_acc = best_acc.cuda()
+    if torch.cuda.is_available():
+        log.cuda()
+        best_acc = best_acc.cuda()
     for _ in range(100):
         log.train()
         opt.zero_grad()
 
         logits = log(train_embs)
         loss = xent(logits, train_lbls)
-        
+
         loss.backward()
         opt.step()
 
@@ -138,12 +145,9 @@ for _ in range(50):
     preds = torch.argmax(logits, dim=1)
     acc = torch.sum(preds == test_lbls).float() / test_lbls.shape[0]
     accs.append(acc * 100)
-    print(acc)
+    pbar.desc = "Accuracy: {:.2f}%".format(100 * acc)
     tot += acc
 
-print('Average accuracy:', tot / 50)
-
 accs = torch.stack(accs)
-print(accs.mean())
-print(accs.std())
-
+print('Average Accuracy: {:.2f}%'.format(accs.mean()))
+print('Standard Deviation: {:.3f}'.format(accs.std()))

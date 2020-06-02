@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from layers import GCN, AvgReadout, Discriminator
+from .layers import GCN, AvgReadout, Discriminator
 
 class DGI(nn.Module):
     def __init__(self, n_in, n_h, activation):
@@ -30,4 +30,3 @@ class DGI(nn.Module):
         c = self.read(h_1, msk)
 
         return h_1.detach(), c.detach()
-
